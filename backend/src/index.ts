@@ -191,7 +191,7 @@ app.post('/login', async (req, res) => {
       const token = signToken({ userId: user.id, email: user.email });
       console.log('Login successful for user:', email);
       console.log('===============================');
-      res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'strict', maxAge: 3600000 }); 
+      res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: 3600000 });
       res.json({ message: 'Login successful', user: { id: user.id, email: user.email }});
     } else {
       res.status(401).json({ error: 'Invalid credentials' });
@@ -237,7 +237,7 @@ app.get('/me', async (req, res) => {
 app.post('/logout', (req, res) => {
   console.log('User logging out');
   try {
-    res.clearCookie('token', { httpOnly: true, secure: true, sameSite: 'strict' });
+    res.clearCookie('token', { httpOnly: true, secure: true, sameSite: 'none' });
     res.json({ message: 'Logout successful' });
   } catch (err) {
     console.error('Error during logout', err);
