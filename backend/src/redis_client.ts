@@ -7,7 +7,10 @@ const sharedOptions = {
 };
 
 const redis = process.env.REDIS_URL
-  ? new Redis(process.env.REDIS_URL, { ...sharedOptions, tls: {} })
+  ? new Redis(process.env.REDIS_URL, {
+      ...sharedOptions,
+      ...(process.env.REDIS_URL.startsWith('rediss://') ? { tls: {} } : {}),
+    })
   : new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: parseInt(process.env.REDIS_PORT || '6379'),
