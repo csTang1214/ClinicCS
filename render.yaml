@@ -30,3 +30,13 @@ services:
         sync: false
       - key: GROQ_CLASSIFIER_MODEL
         sync: false
+      - key: REDIS_URL
+        fromService:
+          name: clinic-redis
+          type: redis
+          property: connectionString
+
+  - type: redis
+    name: clinic-redis
+    plan: free
+    ipAllowList: []

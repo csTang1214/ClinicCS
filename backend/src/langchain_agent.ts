@@ -4,6 +4,7 @@ import { classifyIntent } from './utils/intent_classification.js';
 import { handleRAGIntent } from './utils/intent_actions.js';
 import { Pool } from 'pg';
 import Groq from 'groq-sdk';
+import redis from './redis_client.js';
 
 interface ChatResult {
   messages: BaseMessage[];
@@ -33,7 +34,36 @@ interface SessionState {
   pendingAppointment?: AppointmentInfo;
 }
 
-const sessionStore = new Map<string, SessionState>();
+const SESSION_TTL_SECONDS = 7200;
+const sessionKey = (id: string) => `session:${id}`;
+
+// In-memory fallback used when Redis is unreachable
+const memoryStore = new Map<string, SessionState>();
+
+async function getSession(sessionId: string): Promise<SessionState | null> {
+  try {
+    const raw = await redis.get(sessionKey(sessionId));
+    if (raw) return JSON.parse(raw) as SessionState;
+  } catch {
+    const mem = memoryStore.get(sessionId);
+    if (mem) return mem;
+  }
+  return null;
+}
+
+async function setSession(sessionId: string, state: SessionState): Promise<void> {
+  try {
+    await redis.set(sessionKey(sessionId), JSON.stringify(state), 'EX', SESSION_TTL_SECONDS);
+    memoryStore.delete(sessionId); // clean up fallback entry once Redis is back
+  } catch {
+    memoryStore.set(sessionId, state);
+  }
+}
+
+async function deleteSession(sessionId: string): Promise<void> {
+  memoryStore.delete(sessionId);
+  try { await redis.del(sessionKey(sessionId)); } catch { /* non-fatal */ }
+}
 
 const SLOT_DURATION_MINUTES = 60;
 
@@ -485,23 +515,23 @@ const SUCCESS_MESSAGES: Record<string, [string, string]> = {
 
 // ── Session helpers ───────────────────────────────────────────────────────────
 
-export function clearChatSession(sessionId: string): void {
-  sessionStore.delete(sessionId);
+export async function clearChatSession(sessionId: string): Promise<void> {
+  await deleteSession(sessionId);
 }
 
-function persistSession(
+async function persistSession(
   sessionId: string | undefined,
   session: SessionState,
   userMsg: string,
   botMsg: string,
   newIntent: string,
-): void {
+): Promise<void> {
   if (!sessionId) return;
   session.history.push({ role: 'user', content: userMsg });
   session.history.push({ role: 'assistant', content: botMsg });
   if (session.history.length > 20) session.history.splice(0, session.history.length - 20);
   session.activeIntent = newIntent;
-  sessionStore.set(sessionId, session);
+  await setSession(sessionId, session);
 }
 
 async function generateLLMResponse(
@@ -628,9 +658,8 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
       const { input: userMessage, userId, sessionId } = input;
       const startTime = Date.now();
 
-      const session: SessionState = sessionId && sessionStore.has(sessionId)
-        ? sessionStore.get(sessionId)!
-        : { activeIntent: '', history: [], collectedFields: {}, phase: 'collecting', ragContextCache: '' };
+      const session: SessionState = (sessionId ? await getSession(sessionId) : null)
+        ?? { activeIntent: '', history: [], collectedFields: {}, phase: 'collecting', ragContextCache: '' };
 
       if (!session.phase) session.phase = 'collecting';
       if (!session.ragContextCache) session.ragContextCache = '';
@@ -657,7 +686,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
         if (TRANSACTIONAL.has(intent)) {
           if (!userId) {
             const msg = 'To manage appointments, please log in to your account first.';
-            persistSession(sessionId, session, userMessage, msg, '');
+            await persistSession(sessionId, session, userMessage, msg, '');
             return { messages: [new AIMessage(msg)] };
           }
 
@@ -701,7 +730,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
             session.phase = 'awaiting_confirmation';
             session.pendingActionData = actionData;
             const msg = 'Please review and confirm the details below.';
-            persistSession(sessionId, session, userMessage, msg, intent);
+            await persistSession(sessionId, session, userMessage, msg, intent);
             return { messages: [new AIMessage(msg)], action, actionData };
           }
 
@@ -719,7 +748,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
               const [okMsg, errMsg] = SUCCESS_MESSAGES[intent] ?? ['Done!', 'An error occurred.'];
               const msg = success ? okMsg : errMsg;
               session.phase = 'complete';
-              persistSession(sessionId, session, userMessage, msg, '');
+              await persistSession(sessionId, session, userMessage, msg, '');
               console.log(`[${intent}] Complete (success=${success}) (${Date.now() - startTime}ms)`);
               return { messages: [new AIMessage(msg)], ...(success ? { action: 'appointments_updated' } : {}) };
             }
@@ -727,7 +756,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
             if (isAbort) {
               const msg = 'No problem! Your request has been cancelled. Is there anything else I can help with?';
               session.phase = 'complete';
-              persistSession(sessionId, session, userMessage, msg, '');
+              await persistSession(sessionId, session, userMessage, msg, '');
               return { messages: [new AIMessage(msg)] };
             }
 
@@ -738,7 +767,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
             const pendingAction = intent === 'BOOKING' ? 'show_booking_confirmation'
               : intent === 'RESCHEDULE' ? 'show_reschedule_confirmation'
               : 'show_cancel_confirmation';
-            persistSession(sessionId, session, userMessage, prompt, intent);
+            await persistSession(sessionId, session, userMessage, prompt, intent);
             return { messages: [new AIMessage(prompt)], action: pendingAction, actionData: session.pendingActionData };
           }
 
@@ -749,7 +778,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
             if (session.phase === 'collecting') {
               session.phase = 'date_selection';
               const msg = "I'd be happy to book an appointment! Please select a date below.";
-              persistSession(sessionId, session, userMessage, msg, intent);
+              await persistSession(sessionId, session, userMessage, msg, intent);
               return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
             }
 
@@ -760,13 +789,13 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
 
               if (!parsed) {
                 const msg = 'Please select a valid date from the calendar.';
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
               if (parsed.getUTCDay() === 0) {
                 const msg = 'The clinic is closed on Sundays. Please choose a different date.';
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
@@ -774,7 +803,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
               const services = await getAvailableServices(pool!);
               session.phase = 'service_selection';
               const msg = `You've selected ${formatDateForDisplay(dateISO)}. What type of service do you need?`;
-              persistSession(sessionId, session, userMessage, msg, intent);
+              await persistSession(sessionId, session, userMessage, msg, intent);
               return { messages: [new AIMessage(msg)], action: 'show_service_picker', actionData: { services } };
             }
 
@@ -793,7 +822,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
                 session.collectedFields.date = null;
                 session.phase = 'date_selection';
                 const msg = `The clinic is not available on ${formatDateForDisplay(dateISO)}. Please choose another date.`;
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
@@ -802,7 +831,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
                 session.collectedFields.date = null;
                 session.phase = 'date_selection';
                 const msg = `No available slots on ${formatDateForDisplay(dateISO)} for ${service}. Please choose another date.`;
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
@@ -810,7 +839,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
               const actionData = { ...avail, service };
               session.pendingActionData = actionData;
               const msg = `Here are the available time slots for your ${service} appointment on ${formatDateForDisplay(dateISO)}.`;
-              persistSession(sessionId, session, userMessage, msg, intent);
+              await persistSession(sessionId, session, userMessage, msg, intent);
               return { messages: [new AIMessage(msg)], action: 'show_slot_picker', actionData };
             }
           }
@@ -850,13 +879,13 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
                   session.pendingAppointment = appt;
                   session.phase = 'date_selection';
                   const msg = `Found your appointment with ${appt.doctorName} (${appt.service}) on ${formatDateForDisplay(new Date(appt.date).toISOString().split('T')[0])}. Please select a new date.`;
-                  persistSession(sessionId, session, userMessage, msg, intent);
+                  await persistSession(sessionId, session, userMessage, msg, intent);
                   return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
                 } else {
                   merged.appointment_id = null;
                   session.collectedFields = merged;
                   const msg = `I couldn't find that appointment on your account. Please check the ID, or visit your account page to see your appointments.`;
-                  persistSession(sessionId, session, userMessage, msg, intent);
+                  await persistSession(sessionId, session, userMessage, msg, intent);
                   return { messages: [new AIMessage(msg)] };
                 }
               }
@@ -869,7 +898,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
               ];
               const raw = await generateLLMResponse(groq, groqMessages, 'Please provide your appointment ID to continue.');
               const responseText = processResponse(raw, session.collectedFields);
-              persistSession(sessionId, session, userMessage, responseText, intent);
+              await persistSession(sessionId, session, userMessage, responseText, intent);
               return { messages: [new AIMessage(responseText)] };
             }
 
@@ -880,13 +909,13 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
 
               if (!parsed) {
                 const msg = 'Please select a valid date from the calendar.';
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
               if (parsed.getUTCDay() === 0) {
                 const msg = 'The clinic is closed on Sundays. Please choose a different date.';
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
@@ -896,14 +925,14 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
 
               if (clinicSlots.length === 0) {
                 const msg = `The clinic is not available on ${formatDateForDisplay(dateISO)}. Please choose another date.`;
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
               const avail = await queryAvailability(pool!, dateISO, clinicSlots);
               if (avail.available.length === 0) {
                 const msg = `No available slots on ${formatDateForDisplay(dateISO)}. Please choose another date.`;
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_date_picker' };
               }
 
@@ -911,7 +940,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
               const actionData = { ...avail, service: session.pendingAppointment?.service };
               session.pendingActionData = actionData;
               const msg = `Here are the available slots for ${formatDateForDisplay(dateISO)}.`;
-              persistSession(sessionId, session, userMessage, msg, intent);
+              await persistSession(sessionId, session, userMessage, msg, intent);
               return { messages: [new AIMessage(msg)], action: 'show_slot_picker', actionData };
             }
           }
@@ -950,13 +979,13 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
                 const actionData = { appointmentDetails: appt };
                 session.pendingActionData = actionData;
                 const msg = 'I found your appointment. Please review the details and confirm cancellation.';
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)], action: 'show_cancel_confirmation', actionData };
               } else {
                 merged.appointment_id = null;
                 session.collectedFields = merged;
                 const msg = `I couldn't find that appointment on your account. Please double-check the ID, or visit your account page.`;
-                persistSession(sessionId, session, userMessage, msg, intent);
+                await persistSession(sessionId, session, userMessage, msg, intent);
                 return { messages: [new AIMessage(msg)] };
               }
             }
@@ -968,7 +997,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
             ];
             const raw = await generateLLMResponse(groq, groqMessages, 'Please provide your appointment ID to continue.');
             const responseText = processResponse(raw, session.collectedFields);
-            persistSession(sessionId, session, userMessage, responseText, intent);
+            await persistSession(sessionId, session, userMessage, responseText, intent);
             return { messages: [new AIMessage(responseText)] };
           }
         }
@@ -988,7 +1017,7 @@ export async function createChatAgent(_tools: Tool[], pool?: Pool): Promise<Agen
           : await generateLLMResponse(groq, baseMessages, 'Please contact the clinic directly for assistance.');
         const responseText = processResponse(raw, {});
 
-        persistSession(sessionId, session, userMessage, responseText, '');
+        await persistSession(sessionId, session, userMessage, responseText, '');
         console.log(`[Agent] Done (${Date.now() - startTime}ms)`);
         return { messages: [new AIMessage(responseText)] };
 

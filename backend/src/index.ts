@@ -246,16 +246,16 @@ app.post('/logout', (req, res) => {
 });
 
 // Clear chat session endpoint
-app.post('/clear-session', (req, res) => {
+app.post('/clear-session', async (req, res) => {
   const { sessionId } = req.body;
-  
+
   if (!sessionId) {
     return res.status(400).json({ error: 'Session ID is required' });
   }
-  
+
   try {
     clearSession(sessionId);
-    clearChatSession(sessionId);
+    await clearChatSession(sessionId);
     console.log(`Cleared session: ${sessionId}`);
     res.json({ message: 'Session cleared successfully' });
   } catch (err) {
