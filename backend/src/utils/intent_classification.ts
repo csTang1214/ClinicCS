@@ -7,6 +7,7 @@ const getGroq = () => {
 };
 
 const CLASSIFIER_MODEL = process.env.GROQ_CLASSIFIER_MODEL || 'llama-3.1-8b-instant';
+const CONFIDENCE_THRESHOLD = 0.6;
 
 const SYSTEM_PROMPT = `Classify the user message into exactly ONE of these intents:
 BOOKING, RESCHEDULE, CANCELLATION, CLINIC_INFO, SERVICES, PAYMENT_BILLING, INSURANCE, PRESCRIPTION_REFERRAL, FEEDBACK_COMPLAINT, EMERGENCY, GENERAL_INQUIRY
@@ -80,6 +81,10 @@ export const classifyIntent = async (userMessage: string): Promise<IntentResult>
   try {
     const result = await classifyIntentWithLLM(userMessage);
     console.log(`[Intent] LLM: ${result.intent} (${result.confidence})`);
+    if (result.confidence < CONFIDENCE_THRESHOLD) {
+      console.log(`[Intent] Low confidence (${result.confidence} < ${CONFIDENCE_THRESHOLD}) — falling back to GENERAL_INQUIRY`);
+      return { intent: 'GENERAL_INQUIRY', confidence: result.confidence, reason: `Low-confidence fallback from ${result.intent}` };
+    }
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

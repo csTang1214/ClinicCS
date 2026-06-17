@@ -2,6 +2,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { Pool } from 'pg';
 import { hashPassword, comparePasswords } from './utils/password.js';
 import { signToken, verifyToken, decodeToken} from './utils/jwt.js';
@@ -12,6 +14,7 @@ import { classifyIntent } from './utils/intent_classification.js';
 import { handleRAGIntent } from './utils/intent_actions.js';
 import { createChatAgent, clearChatSession } from './langchain_agent.js';
 import { BookingTool, CancelAppointmentTool, RescheduleAppointmentTool, ClinicalInfoTool } from './utils/langchain_tools.js';
+import redis from './redis_client.js';
 
 
 const envPath = path.resolve(process.cwd(), '.env');
@@ -19,7 +22,10 @@ const rootEnvPath = path.resolve(process.cwd(), '../.env');
 dotenv.config({ path: envPath });
 dotenv.config({ path: rootEnvPath });
 
+if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET must be set');
+
 const app = express();
+app.use(helmet());
 app.use(cookieParser());
 
 // Middleware - must be set up before routes
@@ -36,6 +42,18 @@ app.use(cors({
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many login attempts, please try again later' },
+});
+
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'Too many requests, please slow down' },
+});
 
 // Database connection
 const pool = new Pool({
@@ -101,9 +119,26 @@ async function startServer() {
 
 // Routes
 // Health check endpoint
-app.get('/health', (req, res) => {
-  const response = { status: 'ok', database: 'connected' };
-  res.json(response);
+app.get('/health', async (_req, res) => {
+  const health: Record<string, string> = { status: 'ok' };
+
+  try {
+    await pool.query('SELECT 1');
+    health.postgres = 'ok';
+  } catch {
+    health.postgres = 'error';
+    health.status = 'degraded';
+  }
+
+  try {
+    await redis.ping();
+    health.redis = 'ok';
+  } catch {
+    health.redis = 'error';
+    health.status = 'degraded';
+  }
+
+  res.status(health.status === 'ok' ? 200 : 503).json(health);
 });
 
 // Model health check - verify Groq models are accessible
@@ -171,8 +206,8 @@ app.post('/createPatient', async (req, res) => {
   }
 });
 
-// Login endpoint 
-app.post('/login', async (req, res) => {
+// Login endpoint
+app.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   console.log('===============================');
   console.log('User logging in');
@@ -264,7 +299,7 @@ app.post('/clear-session', async (req, res) => {
   }
 });
 
-app.post('/chat', async (req, res) => {
+app.post('/chat', chatLimiter, async (req, res) => {
   const { message, sessionId } = req.body;
   
   if (!message) {
