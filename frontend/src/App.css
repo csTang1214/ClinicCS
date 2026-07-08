@@ -976,6 +976,145 @@ input.input-error:focus {
   margin: 0;
 }
 
+/* ── Policy Page ──────────────────────────────────────────────────────────── */
+.page-policy {
+  max-width: 860px;
+  margin: 0 auto;
+  display: grid;
+  gap: 40px;
+}
+
+.policy-header {
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  padding-bottom: 32px;
+}
+
+.policy-header h1 {
+  font-size: clamp(2rem, 3vw, 3rem);
+  margin: 12px 0 0;
+}
+
+.policy-body {
+  display: grid;
+  gap: 40px;
+}
+
+.policy-section {
+  display: grid;
+  gap: 16px;
+}
+
+.policy-section h2 {
+  font-size: 1.35rem;
+  color: #4f46e5;
+  border-bottom: 2px solid #e0d7ff;
+  padding-bottom: 8px;
+}
+
+.policy-section h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: -8px;
+}
+
+.policy-section p,
+.policy-section ul {
+  color: #374151;
+  line-height: 1.8;
+  margin: 0;
+}
+
+.policy-section ul {
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.policy-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.policy-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 18px;
+  background: #f8f6ff;
+  border: 1px solid #e0d7ff;
+  border-radius: 14px;
+}
+
+.policy-info-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6366f1;
+}
+
+.policy-info-value {
+  font-size: 0.95rem;
+  color: #0f172a;
+  font-weight: 500;
+}
+
+.policy-hours {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.policy-hours-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  font-size: 0.95rem;
+  color: #1e293b;
+}
+
+.policy-hours-row:last-child {
+  border-bottom: none;
+}
+
+.policy-hours-closed {
+  color: #94a3b8;
+}
+
+.policy-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.policy-service-tag {
+  padding: 6px 14px;
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.policy-emergency {
+  background: #fff5f5;
+  border: 1.5px solid #fecaca;
+  border-radius: 20px;
+  padding: 24px;
+}
+
+.policy-emergency h2 {
+  color: #dc2626;
+  border-bottom-color: #fecaca;
+}
+
+.policy-emergency p {
+  color: #7f1d1d;
+}
+
 @media (max-width: 860px) {
   .hero-panel,
   .feature-grid {

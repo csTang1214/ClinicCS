@@ -9,6 +9,7 @@ type NavbarProps = {
 
 const linkItems: Array<{ key: NavbarProps['activePage']; label: string }> = [
   { key: 'home', label: 'Home' },
+  { key: 'policy', label: 'Policy' },
   { key: 'signup', label: 'Sign Up' },
   { key: 'login', label: 'Login' },
 ]
@@ -46,6 +47,13 @@ export function Navbar({ activePage, onNavigate, isLoggedIn, onLogout }: NavbarP
               onClick={() => onNavigate('home')}
             >
               Home
+            </button>
+            <button
+              type="button"
+              className={activePage === 'policy' ? 'nav-button active' : 'nav-button'}
+              onClick={() => onNavigate('policy')}
+            >
+              Policy
             </button>
             <button
               type="button"

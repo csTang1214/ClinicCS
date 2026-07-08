@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Navbar } from './components/Navbar'
-import { Home, Login, Signup, Account, Chat } from './pages'
+import { Home, Login, Signup, Account, Chat, Policy } from './pages'
 import { useAuth } from './auth/useAuth'
 import './App.css'
 
@@ -31,6 +31,7 @@ function AppContent() {
         {page === 'signup' && <Signup onSignupSuccess={() => setPage('login')} />}
         {page === 'account' && isLoggedIn && <Account />}
         {page === 'chat' && isLoggedIn && <Chat />}
+        {page === 'policy' && <Policy />}
       </main>
     </div>
   )
