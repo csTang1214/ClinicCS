@@ -20,12 +20,15 @@ export function Home({ isLoggedIn, onSelect }: HomeProps) {
             Keep your clinic communications clear and accessible.
           </p>
 
-          {/* Health Check Demo */}
+          {/* Health Check */}
           <div className="health-check-demo" style={{ margin: '1rem 0', padding: '1rem', background: '#f5f5f5', borderRadius: '8px' }}>
-            <h3>Backend Status</h3>
-            {isLoading && <p>Checking backend connection...</p>}
-            {error && <p style={{ color: 'red' }}>Backend connection failed</p>}
-            {healthData && <p style={{ color: 'green' }}>✅ Backend is healthy: {JSON.stringify(healthData)}</p>}
+            {isLoading && <p style={{ color: '#888' }}>Checking service status…</p>}
+            {(error || (healthData && healthData.status !== 'ok')) && (
+              <p style={{ color: 'red' }}>✘ Experiencing technical issues, try again later</p>
+            )}
+            {healthData && healthData.status === 'ok' && (
+              <p style={{ color: 'green' }}>✔ All services are up</p>
+            )}
           </div>
           {isLoggedIn ? (
             <div className="hero-actions">

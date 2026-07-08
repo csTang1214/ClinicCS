@@ -56,14 +56,22 @@ const chatLimiter = rateLimit({
 });
 
 // Database connection
-const pool = new Pool({
-  host:     process.env.DB_HOST     || 'localhost',
-  port:     parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME     || 'clinic_db',
-  user:     process.env.DB_USER     || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
-  ssl:      process.env.DB_HOST?.includes('supabase') ? { rejectUnauthorized: false } : false,
-});
+const isSupabaseHost = (host?: string) =>
+  host?.includes('supabase.co') || host?.includes('pooler.supabase.com');
+
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_URL.includes('supabase') ? { rejectUnauthorized: false } : false,
+    })
+  : new Pool({
+      host:     process.env.DB_HOST     || 'localhost',
+      port:     parseInt(process.env.DB_PORT || '5432'),
+      database: process.env.DB_NAME     || 'clinic_db',
+      user:     process.env.DB_USER     || 'postgres',
+      password: process.env.DB_PASSWORD || 'postgres',
+      ssl:      isSupabaseHost(process.env.DB_HOST) ? { rejectUnauthorized: false } : false,
+    });
 
 pool.on('error', (err: Error) => {
   console.error('Unexpected PostgreSQL error', err);
@@ -100,6 +108,7 @@ async function checkPgVector() {
 }
 
 async function startServer() {
+  console.log('[db] connecting via', process.env.DATABASE_URL ? 'DATABASE_URL' : `${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}`);
   try {
     await pool.query('SELECT 1');
     console.log('PostgreSQL connected');
